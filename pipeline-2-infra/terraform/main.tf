@@ -4,11 +4,29 @@ module "ec2" {
 
   name = "my-project-ec2-sample"
 
-  ami                    = var.ami_id
-  instance_type          = var.instance_type
-  key_name               = var.key_name
-  monitoring             = true
-  subnet_id              = var.subnet_id
+  ami           = var.ami_id
+  instance_type = var.instance_type
+  key_name      = var.key_name
+  monitoring    = true
+  subnet_id     = var.subnet_id
+
+  security_group_ingress_rules = {
+    ssh = {
+      description = "SSH"
+      from_port   = 22
+      to_port     = 22
+      ip_protocol = "tcp"
+      cidr_ipv4   = "0.0.0.0/0"
+    }
+
+    http = {
+      description = "HTTP"
+      from_port   = 80
+      to_port     = 80
+      ip_protocol = "tcp"
+      cidr_ipv4   = "0.0.0.0/0"
+    }
+  }
 
   tags = {
     Terraform   = "true"
