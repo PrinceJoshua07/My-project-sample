@@ -50,3 +50,87 @@ jobs:
 
           docker push \
             $ECR_REGISTRY/$ECR_REPOSITORY:client-${IMAGE_TAG}
+
+  deploy:
+    name: Deploy Application to EC2
+    runs-on: ubuntu-latest
+    needs: build-and-push
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Create SSH key
+        run: |
+          echo "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > ec2-key.pem
+          chmod 600 ec2-key.pem
+
+      - name: Login to ECR on EC2
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          aws ecr get-login-password --region "$AWS_REGION" | \
+          ssh -o StrictHostKeyChecking=no \
+            -i ec2-key.pem \
+            ubuntu@"$EC2_HOST" \
+            "docker login --username AWS --password-stdin $ECR_REGISTRY"
+
+      - name: Deploy application
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          ssh -o StrictHostKeyChecking=no \
+            -i ec2-key.pem \
+            ubuntu@"$EC2_HOST" \
+            "mkdir -p ~/my-project-sample"
+
+          MONGO_B64=$(printf '%s' "${{ secrets.MONGODB_URI }}" | base64 -w0)
+
+          ssh -o StrictHostKeyChecking=no \
+            -i ec2-key.pem \
+            ubuntu@"$EC2_HOST" \
+            "echo '$MONGO_B64' | base64 -d > ~/my-project-sample/.env"
+
+          ssh -o StrictHostKeyChecking=no \
+            -i ec2-key.pem \
+            ubuntu@"$EC2_HOST" \
+            "cat > ~/my-project-sample/docker-compose.yml <<'EOF'
+          services:
+            server:
+              image: $ECR_REGISTRY/$ECR_REPOSITORY:server-$IMAGE_TAG
+              restart: unless-stopped
+              env_file:
+                - .env
+              environment:
+                PORT: 5000
+              expose:
+                - "5000"
+
+            client:
+              image: $ECR_REGISTRY/$ECR_REPOSITORY:client-$IMAGE_TAG
+              restart: unless-stopped
+              depends_on:
+                - server
+              ports:
+                - "80:80"
+          EOF"
+
+          ssh -o StrictHostKeyChecking=no \
+            -i ec2-key.pem \
+            ubuntu@"$EC2_HOST" \
+            "cd ~/my-project-sample && docker compose pull && docker compose up -d"
+
+      - name: Show running containers
+        run: |
+          ssh -o StrictHostKeyChecking=no \
+            -i ec2-key.pem \
+            ubuntu@"$EC2_HOST" \
+            "docker ps"
